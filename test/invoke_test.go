@@ -106,6 +106,43 @@ func (s) TestInvokeErrorSpecialChars(t *testing.T) {
 	}
 }
 
+func (s) TestInvokeErrorEOF(t *testing.T) {
+	const largeReqPayloadSize = 65536 * 10
+	const respSize = 1
+	const immediateErr = "some immediate error"
+
+	ss := &stubserver.StubServer{
+		UnaryCallF: func(context.Context, *testpb.SimpleRequest) (*testpb.SimpleResponse, error) {
+			return &testpb.SimpleResponse{}, status.Error(codes.Internal, immediateErr)
+		},
+	}
+	if err := ss.Start([]grpc.ServerOption{
+		grpc.InitialWindowSize(65536),
+	}); err != nil {
+		t.Fatalf("Failed to start stub server: %v", err)
+	}
+	defer ss.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	largePayload, err := newPayload(testpb.PayloadType_COMPRESSABLE, largeReqPayloadSize)
+	if err != nil {
+		t.Fatalf("Failed to create large payload: %v", err)
+	}
+	err = ss.CC.Invoke(ctx, "/grpc.testing.TestService/UnaryCall", &testpb.SimpleRequest{
+		ResponseType: testpb.PayloadType_COMPRESSABLE,
+		ResponseSize: respSize,
+		Payload:      largePayload,
+	}, &testpb.SimpleResponse{})
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatal("grpc.Invoke(\"/grpc.testing.TestService/EmptyCall\") received non-status error")
+	}
+	if status.Code(err) != codes.Internal || st.Message() != immediateErr {
+		t.Fatalf("grpc.Invoke(\"/grpc.testing.TestService/EmptyCall\") failed with error: %v, want %v", err, immediateErr)
+	}
+}
+
 // TestInvokeCancel tests an invocation of ClientConn.Invoke() with a cancelled
 // context and verifies that the request is not actually sent to the server.
 func (s) TestInvokeCancel(t *testing.T) {
