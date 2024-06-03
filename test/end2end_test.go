@@ -6053,6 +6053,47 @@ func (s) TestAuthorityHeader(t *testing.T) {
 	}
 }
 
+func (s) TestEmulatedInvokeWithClientStream(t *testing.T) {
+	immediateErr := "immediate error"
+	ts := &funcServer{
+		fullDuplexCall: func(stream grpc.BidiStreamingServer[testgrpc.StreamingOutputCallRequest, testgrpc.StreamingOutputCallResponse]) error {
+			return fmt.Errorf(immediateErr)
+		},
+	}
+	te := newTest(t, noBalancerEnv)
+	te.startServer(ts)
+	defer te.tearDown()
+
+	largePayload, err := newPayload(testpb.PayloadType_COMPRESSABLE, 65536*100)
+	if err != nil {
+		te.t.Fatalf("Error creating large payload: %v", err)
+	}
+	req := &testgrpc.StreamingOutputCallRequest{
+		ResponseType: testpb.PayloadType_COMPRESSABLE,
+		Payload:      largePayload,
+	}
+	resp := new(testgrpc.StreamingOutputCallResponse)
+
+	tc := testgrpc.NewTestServiceClient(te.clientConn())
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	cs, err := tc.FullDuplexCall(ctx)
+	if err != nil {
+		te.t.Fatalf("Error getting bidi stream: %v", err)
+	}
+	err = emulatedInvoke(cs, req, resp)
+	if err.Error() != immediateErr {
+		te.t.Fatalf("Emulated invoke failed with error: %v, want: %v", err, immediateErr)
+	}
+}
+
+func emulatedInvoke(cs grpc.ClientStream, req, reply any) error {
+	if err := cs.SendMsg(req); err != nil {
+		return err
+	}
+	return cs.RecvMsg(reply)
+}
+
 // wrapCloseListener tracks Accepts/Closes and maintains a counter of the
 // number of open connections.
 type wrapCloseListener struct {
